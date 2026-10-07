@@ -86,20 +86,21 @@ resource "aws_ecr_repository_policy" "this" {
   policy = length(var.allowed_write_principals) > 0 ? data.aws_iam_policy_document.ecr_read_and_write_perms[0].json : data.aws_iam_policy_document.ecs_ecr_read_perms[0].json
 }
 
-# Interpolate the rule_priority with the count.index + 1
-# The idea was to use template_vars but they do not render, hence the replace
-data "template_file" "lifecycle_policy_rules" {
-  count = (var.create ? 1 : 0) * var.lifecycle_policy_rules_count
-
-  template = replace(var.lifecycle_policy_rules[count.index], "priority:replace:this", (count.index + 1))
+# Rules without an explicit priority carry the placeholder priority:replace:this, which is replaced with the rule's
+# position in the list (starting at 1)
+locals {
+  lifecycle_policy_rules = [
+    for index, rule in slice(var.lifecycle_policy_rules, 0, var.lifecycle_policy_rules_count) :
+    replace(rule, "priority:replace:this", index + 1)
+  ]
 }
 
-# The final rendered lifecycle_policy will be regexed to remove the double quotes surrounding strings
+# The final rendered lifecycle_policy will be regexed to remove the double quotes surrounding numbers and booleans
 resource "aws_ecr_lifecycle_policy" "this" {
   count      = var.create && var.lifecycle_policy_rules_count > 0 ? 1 : 0
   repository = aws_ecr_repository.this[0].name
 
-  policy = replace("{\"rules\": [${join(",", data.template_file.lifecycle_policy_rules.*.rendered)}]}",
+  policy = replace("{\"rules\": [${join(",", local.lifecycle_policy_rules)}]}",
     "/\"(true|false|[[:digit:]]+)\"/", "$1"
   )
 }
